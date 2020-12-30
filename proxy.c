@@ -28,7 +28,6 @@ int main(int argc, char **argv)
     int listenfd, connfd;
     char hostname[MAXLINE], port[MAXLINE];
     socklen_t clientlen;
-    struct sockaddr_storage clientaddr;
     pthread_t tid;
 
     if(argc != 2)
@@ -36,8 +35,10 @@ int main(int argc, char **argv)
         fprintf(stderr, "usage: %s <port>\n", argv[0]);
     } 
 
+    /* create listening socket file descriptor */
     listenfd = Open_listenfd(argv[1]);
     
+    /* open MAX_THREADS threads */
     int i;
     sbuf_init(&sbuf, SBUFSIZE);
     for(i = 0; i < MAX_THREADS; i++)
@@ -47,17 +48,14 @@ int main(int argc, char **argv)
 
     while(1)
     {
-        /* Accept connection from client, create filedescriptor and serve client */
+        /* Accept connection from client, create filedescriptor and insert it into buffer */
         clientlen = sizeof(clientaddr);
         connfd = Accept(listenfd, (SA *)&clientaddr, &clientlen);
         sbuf_insert(&sbuf, connfd);
-        Getnameinfo((SA *) &clientaddr, clientlen, hostname, MAXLINE, port, MAXLINE, 0);
-        printf("Accepted connection from (%s, %s)", hostname, port);
-        doit(connfd);
-        Close(connfd);
     }
 }
 
+/* function done by each thread */
 void *thread(void *vargp)
 {
     Pthread_detach(pthread_self());
@@ -120,6 +118,7 @@ void doit(int connfd)
     Close(end_serverfd);
 }
 
+/* function to split uri into hostname, filepath and port */
 void parse_uri(char *uri, char *hostname, char *filepath, int *port)
 {
     char* ptr = strstr(uri,"//");
@@ -147,6 +146,7 @@ void parse_uri(char *uri, char *hostname, char *filepath, int *port)
     return;
 }
 
+/* create full request header to send to endserver */
 void build_header(char *header, char *hostname, char *path, rio_t *client_rio)
 {
     sprintf(header, "GET %s HTTP/1.0\r\n", path);
@@ -156,6 +156,7 @@ void build_header(char *header, char *hostname, char *path, rio_t *client_rio)
     sprintf(header, "%s%s\r\n", header, proxy_connection);
 }
 
+/* error function */
 void client_error(int fd, char *cause, char *errnum, char *shortmsg, char *longmsg)
 {
     char buf[MAXLINE], body[MAXBUF];
