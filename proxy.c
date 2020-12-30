@@ -1,20 +1,27 @@
 #include "csapp.h"
-#include <stdio.h>
+#include "sbuf.h"
 
 /* Recommended max cache and object sizes */
 #define MAX_CACHE_SIZE 1049000
 #define MAX_OBJECT_SIZE 102400
 
-/* You won't lose style points for including this long line in your code */
+#define MAX_THREADS 4
+#define SBUFSIZE 16
+
+/* Header elements */
 static const char *user_agent_hdr = "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:10.0.3) Gecko/20120305 Firefox/10.0.3\r\n";
 static const char *connection = "Connection: close";
 static const char *proxy_connection = "Proxy-connection: close";
 
+/* Function prototypes */
 void doit(int fd);
 void read_reqheaders(rio_t *rio);
 int parse_uri(char *uri, char *hostname, char *filename, int *port);
 void client_error(int fd, char *cause, char *errnum, char *shortmsg, char *longmsg);
 void build_header(char *header, char *hostname, char *path, rio_t *client_rio);
+void *thread (int *cvargs);
+
+sbuf_t sbuf;
 
 int main(int argc, char **argv)
 {
@@ -22,20 +29,40 @@ int main(int argc, char **argv)
     char hostname[MAXLINE], port[MAXLINE];
     socklen_t clientlen;
     struct sockaddr_storage clientaddr;
+    pthread_t tid;
 
     if(argc != 2)
     {
         fprintf(stderr, "usage: %s <port>\n", argv[0]);
-    }
+    } 
 
     listenfd = Open_listenfd(argv[1]);
     
+    int i;
+    sbuf_init(&sbuf, SBUFSIZE);
+    for(i = 0; i < MAX_THREADS; i++)
+    {
+        Pthread_create(&tid, NULL, thread, NULL);
+    }
+
     while(1)
     {
+        /* Accept connection from client, create filedescriptor and serve client */
         clientlen = sizeof(clientaddr);
         connfd = Accept(listenfd, (SA *)&clientaddr, &clientlen);
+        sbuf_insert(&sbuf, connfd);
         Getnameinfo((SA *) &clientaddr, clientlen, hostname, MAXLINE, port, MAXLINE, 0);
         printf("Accepted connection from (%s, %s)", hostname, port);
+        doit(connfd);
+        Close(connfd);
+    }
+}
+
+void *thread(void *vargp)
+{
+    Pthread_detach(pthread_self());
+    while(i) {
+        int connfd = sbuf_remove(sbuf);
         doit(connfd);
         Close(connfd);
     }
@@ -51,20 +78,25 @@ void doit(int connfd)
     char portbuf[100];
     int n;
 
+    /* Read headers */
     Rio_readinitb(&rio, fd);
     Rio_readlineb(&rio, buf, MAXLINE);
     sscanf(buf, "%s %s %s", method, uri, version);
 
+    /* Only GET requests are implemented */
     if(strcasecmp(method, "GET") != 0)
     {
         client_error(fd, method, "501", "Not implemented", "Proxy does not support this method");
         return;
     }
 
+    /* Split request into hostname, URI, filepath and port */
     parse_uri(uri, hostname, filepath, &port);
 
+    /* Build header with elements described above */
     build_header(end_header, hostname, filepath, client_rio);
 
+    /* Connect to end server */
     sprintf(portstr, "%d", port);
     end_serverfd = Open_clientfd(hostname, portstr);
     
@@ -74,10 +106,11 @@ void doit(int connfd)
         return;
     }
 
+    /* Send header to end server */
     Rio_readinitb(&server_rio, end_serverfd);
-
     Rio_writen(end_serverfd, end_header);
 
+    /* Read bytes received from server, send to client */
     while(n = Rio_readlineb(&server_rio, buf, MAXLINE) != 0)
     {
         print("Received %s bytes from server, sending to client...", strlen(buf));
@@ -121,7 +154,6 @@ void build_header(char *header, char *hostname, char *path, rio_t *client_rio)
     sprintf(header, "%s%s\r\n", header, user_agent_hdr);
     sprintf(header, "%s%s\r\n", header, connection);
     sprintf(header, "%s%s\r\n", header, proxy_connection);
-
 }
 
 void client_error(int fd, char *cause, char *errnum, char *shortmsg, char *longmsg)
